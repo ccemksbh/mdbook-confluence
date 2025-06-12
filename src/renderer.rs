@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -17,8 +18,8 @@ use mdbook::renderer::RenderContext;
 use mdbook::utils::new_cmark_parser;
 use mdbook::BookItem;
 use mime_guess::MimeGuess;
-use pulldown_cmark::{Event, Tag};
-use pulldown_cmark_to_cmark::cmark;
+use pulldown_cmark::{Event, Tag, TagEnd};
+use pulldown_cmark_to_cmark::{cmark, cmark_resume};
 use regex::Regex;
 use semver::Version;
 use unicode_segmentation::UnicodeSegmentation;
@@ -82,7 +83,7 @@ impl ConfluenceRenderer {
             &config.username.clone(),
             &config.password.clone(),
         )
-        .await?;
+            .await?;
 
         let server_version = session.get_server_version().await?;
 
@@ -159,7 +160,7 @@ impl InternalRenderer {
         parent: &ParentPage,
         root_path: &Path,
     ) -> Result<UpdatePage, Error> {
-        let mut events = vec![];
+        let mut events: Vec<Event<'_>> = vec![];
         let mut last_image = None;
 
         // assume we've already filtered out all the draft chapters
@@ -169,11 +170,11 @@ impl InternalRenderer {
 
         for event in new_cmark_parser(&chapter.content, false) {
             last_image = match (event, last_image) {
-                (Event::Start(Tag::Image(link_type, url, title)), None) => {
+                (Event::Start(Tag::Image { link_type, dest_url, title, id }), None) => {
                     match self
                         .upload_image(
                             title.to_string(),
-                            url.to_string(),
+                            dest_url.to_string(),
                             &chapter_path,
                             existing_page.id,
                         )
@@ -181,18 +182,18 @@ impl InternalRenderer {
                     {
                         Some(new_url) => {
                             // if we have a new url update our tags
-                            let tag = Tag::Image(link_type, new_url.into(), title);
+                            let tag = Tag::Image {link_type, dest_url: new_url.into(), title, id};
                             events.push(Event::Start(tag.clone()));
                             Some(tag)
                         }
                         None => {
-                            events.push(Event::Start(Tag::Image(link_type, url, title)));
+                            events.push(Event::Start(Tag::Image{link_type, dest_url, title, id}).into());
                             None
                         }
                     }
                 }
-                (Event::End(Tag::Image(_, _, _)), Some(last)) => {
-                    events.push(Event::End(last));
+                (Event::End(TagEnd::Image), Some(_last)) => {
+                    events.push(Event::End(TagEnd::Image));
                     None
                 }
                 (e, last) => {
